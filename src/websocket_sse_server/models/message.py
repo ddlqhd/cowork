@@ -19,3 +19,4 @@ class ClientMessage(BaseModel):
 
     type: str = Field(..., description="Message type")
     data: dict = Field(default_factory=dict, description="Message data")
+    correlation_id: Optional[str] = Field(None, description="Correlation ID for request/response matching")

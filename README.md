@@ -1,12 +1,15 @@
 # WebSocket SSE Server
 
-A FastAPI-based WebSocket server with SSE endpoint support for receiving upstream messages.
+A FastAPI-based server that provides bidirectional communication between Server-Sent Events (SSE) and WebSocket connections.
 
 ## Features
 
 - **WebSocket Server**: Handle WebSocket connections with user ID extraction
-- **SSE Endpoint**: HTTP endpoint for receiving upstream SSE messages
-- **Message Routing**: Route messages to appropriate WebSocket connections based on user ID
+- **SSE Stream Endpoint**: Real-time SSE stream for receiving messages from server
+- **SSE Push Endpoint**: HTTP endpoint for receiving upstream SSE messages
+- **Bidirectional Communication**: Forward messages from SSE to WebSocket and responses back to SSE
+- **Message Correlation**: Match requests and responses using correlation IDs
+- **Message Routing**: Route messages to appropriate WebSocket/SSE connections based on user ID
 - **Connection Management**: Thread-safe connection management with proper cleanup
 - **Batch Support**: Support for batch message processing
 - **Health Checks**: Health and metrics endpoints
@@ -14,31 +17,16 @@ A FastAPI-based WebSocket server with SSE endpoint support for receiving upstrea
 ## Architecture
 
 ```
-┌─────────────────┐
-│  Upstream       │
-│  (SSE Producer) │
-└────────┬────────┘
-         │
-         │ HTTP POST
-         ▼
-┌─────────────────┐
-│  SSE Endpoint   │
-│  (/sse/push)    │
-└────────┬────────┘
-         │
-         │ Message Router
-         ▼
-┌─────────────────┐
-│  Connection     │
-│  Manager        │
-└────────┬────────┘
-         │
-         │ WebSocket
-         ▼
-┌─────────────────┐
-│  Client         │
-│  (WebSocket)    │
-└─────────────────┘
+┌─────────────┐    SSE Messages      ┌─────────────────┐    WebSocket
+│ SSE Client  │ ────────────────→    │                 │ ←──────────────  ┌─────────────┐
+│             │                      │  FastAPI        │                   │ WebSocket   │
+│             │                      │  Server         │                   │ Client      │
+└─────────────┘                      │                 │                   └─────────────┘
+                                     │ • WebSocket     │
+┌─────────────┐    ←──────────────   │ • SSE Handler   │    ←──────────────  ┌─────────────┐
+│ SSE Client  │    WebSocket         │ • Connection    │                   │ WebSocket   │
+│ (Response)  │    Response          │   Manager       │                   │ (Response)  │
+└─────────────┘                      │                 │                   └─────────────┘
 ```
 
 ## Project Structure
@@ -162,16 +150,51 @@ const ws = new WebSocket('ws://localhost:8080/ws?user_id=test123');
 ws.onmessage = (event) => console.log(event.data);
 ```
 
-### SSE Push Endpoint
+### SSE Request-Response Endpoint
 
-**URL**: `POST /sse/push`
+**URL**: `POST /sse/send`
+
+**Description**: Sends a message to a WebSocket client and streams the response back via SSE. This creates a request-response flow where the upstream service can receive the WebSocket client's response in real-time.
 
 **Request Body**:
 
 ```json
 {
   "user_id": "test123",
-  "data": {"message": "Hello from upstream!", "type": "notification"},
+  "data": {"message": "Hello from upstream!", "type": "request", "correlation_id": "req_123"},
+  "event_type": "message",
+  "event_id": "123",
+  "timestamp": 1704067200
+}
+```
+
+**Example**:
+
+```bash
+curl -X POST http://localhost:8080/sse/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test123",
+    "data": {"message": "Hello from upstream!", "type": "request", "correlation_id": "req_123"},
+    "event_type": "message",
+    "timestamp": 1704067200
+  }'
+```
+
+**Response**: Streams back WebSocket client responses as SSE events until the conversation is complete or timeout occurs.
+
+### SSE Push Endpoint
+
+**URL**: `POST /sse/push`
+
+**Description**: Pushes a message to a WebSocket client without expecting a response. This is for one-way notifications to the client.
+
+**Request Body**:
+
+```json
+{
+  "user_id": "test123",
+  "data": {"message": "Hello from upstream!", "type": "notification", "correlation_id": "req_123"},
   "event_type": "message",
   "event_id": "123",
   "timestamp": 1704067200
@@ -185,7 +208,7 @@ curl -X POST http://localhost:8080/sse/push \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "test123",
-    "data": {"message": "Hello from upstream!", "type": "notification"},
+    "data": {"message": "Hello from upstream!", "type": "notification", "correlation_id": "req_123"},
     "event_type": "message",
     "timestamp": 1704067200
   }'
@@ -280,7 +303,61 @@ pytest tests/integration/
 pytest --cov=src/websocket_sse_server --cov-report=html
 ```
 
-## Manual Testing
+## Bidirectional Communication Example
+
+### 1. Start the Server
+
+```bash
+uvicorn src.websocket_sse_server.main:app --reload
+```
+
+### Request-Response Flow (Direct Response Streaming)
+
+#### 2. Send Request with Immediate Response Streaming
+
+Send a request and immediately receive the WebSocket response:
+
+```bash
+# Terminal 1: Send request and stream response
+curl -X POST http://localhost:8080/sse/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user123",
+    "data": {
+      "message": "Please process this and send a response",
+      "action": "request",
+      "correlation_id": "req_456"
+    }
+  }'
+```
+
+#### 3. Connect WebSocket Client (in another terminal)
+
+```bash
+# Terminal 2: Connect WebSocket
+wscat -c "ws://localhost:8080/ws?user_id=user123"
+```
+
+#### 4. WebSocket Client Responds
+
+In the wscat terminal, send a response:
+
+```json
+{
+  "type": "response",
+  "data": {
+    "reply": "Processed your request successfully!",
+    "original_request_id": "req_456"
+  },
+  "correlation_id": "req_456"
+}
+```
+
+#### 5. Verify Response Delivered
+
+Check that the response appears immediately in the curl terminal (Terminal 1) as an SSE event. If the response includes `"is_final": true`, the stream will automatically terminate.
+
+## Manual Testing (Traditional Flow)
 
 ### 1. Start the Server
 

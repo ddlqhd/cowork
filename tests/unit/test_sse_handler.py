@@ -30,7 +30,12 @@ class TestSSEHandler:
 
         result = await handler.process_sse_message(message)
         assert result is True
-        mock_websocket.send_json.assert_called_once_with({"text": "Hello"})
+        # The message now includes user_id and correlation_id
+        call_args = mock_websocket.send_json.call_args
+        sent_message = call_args[0][0]
+        assert sent_message["text"] == "Hello"
+        assert sent_message["user_id"] == "user1"
+        assert "correlation_id" in sent_message
 
     @pytest.mark.asyncio
     async def test_process_sse_message_user_not_connected(self, handler):
@@ -68,7 +73,12 @@ class TestSSEHandler:
 
         result = await handler.process_sse_message(message)
         assert result is True
-        mock_websocket.send_json.assert_called_once_with({"text": "Hello"})
+        # The message now includes user_id and correlation_id
+        call_args = mock_websocket.send_json.call_args
+        sent_message = call_args[0][0]
+        assert sent_message["text"] == "Hello"
+        assert sent_message["user_id"] == "user1"
+        assert "correlation_id" in sent_message
 
     @pytest.mark.asyncio
     async def test_process_batch_sse_messages(self, handler):
