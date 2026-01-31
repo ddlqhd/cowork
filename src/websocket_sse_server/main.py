@@ -44,7 +44,7 @@ app.add_middleware(
 )
 
 # Routers
-app.include_router(ws_router, prefix=settings.ws_path)
+app.include_router(ws_router, prefix="")  # No prefix needed since ws_router already defines /ws
 app.include_router(sse_router, prefix="")
 
 
