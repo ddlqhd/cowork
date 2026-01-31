@@ -38,7 +38,8 @@ class ConnectionManager:
                 return True
             except Exception as e:
                 logger.error(f"Error sending to user {user_id}: {e}")
-                await self.disconnect(user_id)
+                # Remove the user from connections directly to avoid nested lock acquisition
+                self.connections.pop(user_id, None)
                 return False
 
     async def broadcast(self, message: dict) -> int:
@@ -54,8 +55,9 @@ class ConnectionManager:
                 except Exception:
                     disconnected.append(user_id)
 
+            # Remove disconnected users directly to avoid nested lock acquisition
             for user_id in disconnected:
-                await self.disconnect(user_id)
+                self.connections.pop(user_id, None)
 
             return sent_count
 
