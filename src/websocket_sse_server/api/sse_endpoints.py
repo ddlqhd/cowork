@@ -22,7 +22,7 @@ async def push_sse_message(
 ):
     """Receive a single SSE message from upstream."""
     try:
-        success = await sse_handler.process_sse_message(message.dict())
+        success = await sse_handler.process_sse_message(message.model_dump())
 
         if success:
             return {"status": "success", "message": "Message delivered"}
@@ -42,7 +42,7 @@ async def push_batch_sse_messages(
     """Receive multiple SSE messages from upstream."""
     try:
         results = await sse_handler.process_batch_sse_messages(
-            [msg.dict() for msg in messages]
+            [msg.model_dump() for msg in messages]
         )
         return {"results": results}
     except Exception as e:
