@@ -448,6 +448,18 @@ Check that the message appears in the wscat terminal.
 5. **Rate Limiting**: Add rate limiting for SSE endpoints
 6. **Authentication**: Add JWT or OAuth2 authentication
 
+## Documentation
+
+Complete documentation is available in the [docs](docs/) directory:
+
+- [Overview](docs/overview.md) - Introduction to the project
+- [Architecture](docs/architecture.md) - System architecture and components
+- [API Reference](docs/api.md) - Detailed API documentation
+- [Configuration](docs/configuration.md) - Configuration options and settings
+- [Deployment](docs/deployment.md) - Deployment guides and best practices
+- [Development](docs/development.md) - Development setup and contribution guidelines
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+
 ## License
 
 MIT

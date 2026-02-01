@@ -1,8 +1,10 @@
 """Configuration management using Pydantic settings."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional, Set
+from typing import Optional, Set, List
 import os
+import re
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -27,12 +29,64 @@ class Settings(BaseSettings):
     log_format: str = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 
     # Security
-    cors_origins: str = "*"
+    cors_origins: str = "http://localhost,http://127.0.0.1,https://localhost,https://127.0.0.1"
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8"
     )
+
+    @field_validator('host')
+    @classmethod
+    def validate_host(cls, v):
+        """Validate host format."""
+        if not v or not isinstance(v, str):
+            raise ValueError('Host must be a non-empty string')
+        # Basic validation for IP address or domain name
+        if not re.match(r'^[\w\.\-\*]+$', v):
+            raise ValueError(f'Invalid host format: {v}')
+        return v
+
+    @field_validator('port')
+    @classmethod
+    def validate_port(cls, v):
+        """Validate port range."""
+        if not 1 <= v <= 65535:
+            raise ValueError(f'Port must be between 1 and 65535, got: {v}')
+        return v
+
+    @field_validator('log_level')
+    @classmethod
+    def validate_log_level(cls, v):
+        """Validate log level."""
+        valid_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
+        if v.upper() not in valid_levels:
+            raise ValueError(f'Log level must be one of {valid_levels}, got: {v}')
+        return v.upper()
+
+    @field_validator('cors_origins')
+    @classmethod
+    def validate_cors_origins(cls, v):
+        """Validate CORS origins format."""
+        if not v:
+            raise ValueError('CORS origins cannot be empty')
+
+        origins = [origin.strip() for origin in v.split(',')]
+        for origin in origins:
+            if origin != "*" and not cls.is_valid_url(origin):
+                raise ValueError(f'Invalid CORS origin format: {origin}')
+
+        return v
+
+    @staticmethod
+    def is_valid_url(url: str) -> bool:
+        """Basic URL validation."""
+        url_pattern = re.compile(
+            r'^https?://'  # http:// or https://
+            r'(?:[a-zA-Z0-9-]+\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,}'  # domain (including localhost)
+            r'(?::[0-9]+)?$'  # optional port
+        )
+        return bool(url_pattern.match(url)) or url in ['http://localhost', 'https://localhost', 'http://127.0.0.1', 'https://127.0.0.1']
 
 
 settings = Settings()
