@@ -102,8 +102,18 @@ HOST=0.0.0.0
 PORT=8080
 DEBUG=false
 WS_PATH=/ws
+WS_PING_INTERVAL=30
+WS_PING_TIMEOUT=10
+SSE_PATH=/sse/push
+SSE_BATCH_PATH=/sse/push/batch
 LOG_LEVEL=INFO
+LOG_FORMAT={time:YYYY-MM-DD HH:mm:ss} | {level} | {message}
 CORS_ORIGINS=*
+
+# Public accounts configuration
+# Comma-separated list of public accounts that can receive messages via @mentions
+# Example: PUBLIC_ACCOUNTS=ci_bot,email_bot,notification_bot
+PUBLIC_ACCOUNTS=
 ```
 
 ## Running the Server
@@ -166,6 +176,37 @@ ws.onmessage = (event) => console.log(event.data);
   "event_id": "123",
   "timestamp": 1704067200
 }
+```
+
+### Public Accounts Feature
+
+The system supports public accounts (such as CI bots, email bots, etc.) that can receive messages from any user. Users can send messages to public accounts using the @mention syntax in their message content.
+
+**Supported Public Accounts**: By default, the system recognizes the following public accounts:
+- `ci_bot`
+- `email_bot`
+- `notification_bot`
+- `system_bot`
+
+You can configure additional public accounts using the `PUBLIC_ACCOUNTS` environment variable.
+
+**Example**: To send a message to the CI bot, include `@ci_bot` in your message:
+```json
+{
+  "user_id": "user123",
+  "data": {
+    "message": "Please run tests on my branch @ci_bot",
+    "correlation_id": "corr-123"
+  }
+}
+```
+
+When a message contains a @mention of a public account, the message will be routed to that public account's WebSocket connection instead of the originally specified user. The public account will receive the message along with the `original_sender` information so it knows who sent the request.
+
+**Environment Configuration**:
+To add custom public accounts, set the `PUBLIC_ACCOUNTS` environment variable:
+```
+PUBLIC_ACCOUNTS=custom_bot1,custom_bot2,another_bot
 ```
 
 **Example**:

@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import re
 import uuid
-from typing import Dict
+from typing import Dict, Optional, Tuple
 from pydantic import ValidationError
 from loguru import logger
 from .connection_manager import ConnectionManager
 from ..models.message import SSEMessage
+from ..config import is_public_account, get_public_accounts
 
 
 class SSEHandler:
@@ -59,10 +61,17 @@ class SSEHandler:
             message = SSEMessage(**raw_message)
 
             # Extract user_id
-            user_id = message.user_id
+            original_user_id = message.user_id
+
+            # Check if the message contains @public_account pattern
+            target_user_id, original_sender_info = self._extract_target_and_sender(original_user_id, message.data)
+
+            # Add original sender info to the message data to ensure public accounts know who sent the message
+            message.data['original_sender'] = original_sender_info
 
             # Add user_id to the message data to ensure WebSocket clients know which user this is for
-            message.data['user_id'] = user_id
+            # This preserves the original behavior while adding the new functionality
+            message.data['user_id'] = original_user_id
 
             # Add correlation ID if not present
             correlation_id = message.data.get('correlation_id')
@@ -71,11 +80,11 @@ class SSEHandler:
                 message.data['correlation_id'] = correlation_id
 
             # Store correlation for tracking responses
-            self.correlation_map[correlation_id] = user_id
+            self.correlation_map[correlation_id] = target_user_id
 
             # Send to WebSocket connection
             ws_success = await self.connection_manager.send_to_user(
-                user_id,
+                target_user_id,
                 message.data
             )
 
@@ -88,6 +97,55 @@ class SSEHandler:
         except Exception as e:
             logger.error(f"Error processing SSE message: {e}")
             return False
+
+    def _extract_target_and_sender(self, original_user_id: str, message_data: dict) -> Tuple[str, dict]:
+        """
+        Extract target user ID and original sender info from message.
+
+        Checks if the message contains @public_account pattern and updates target accordingly.
+
+        Args:
+            original_user_id: The original user ID from the message
+            message_data: The message data
+
+        Returns:
+            A tuple of (target_user_id, original_sender_info)
+        """
+        # Prepare original sender info
+        original_sender_info = {
+            'user_id': original_user_id,
+            'timestamp': message_data.get('timestamp')
+        }
+
+        # Check if the message data contains text that might have @mentions
+        message_text = ""
+        if isinstance(message_data.get('message'), str):
+            message_text = message_data['message']
+        elif isinstance(message_data.get('text'), str):
+            message_text = message_data['text']
+        elif isinstance(message_data.get('data'), str):
+            message_text = message_data['data']
+        elif isinstance(message_data, dict):
+            # Look for common fields that might contain text
+            for field in ['message', 'text', 'content', 'body']:
+                if isinstance(message_data.get(field), str):
+                    message_text = message_data[field]
+                    break
+
+        # Find @mentions in the message text
+        if message_text:
+            # Regex pattern to match @username (where username is alphanumeric and underscore)
+            pattern = r'@([a-zA-Z0-9_]+)'
+            matches = re.findall(pattern, message_text)
+
+            # Check if any matched username is a public account
+            for matched_account in matches:
+                if is_public_account(matched_account):
+                    logger.info(f"Detected @mention of public account '{matched_account}' from user '{original_user_id}'")
+                    return matched_account, original_sender_info
+
+        # If no public account mentioned, return original user_id
+        return original_user_id, original_sender_info
 
     async def process_batch_sse_messages(self, raw_messages: list) -> list:
         """Process multiple SSE messages."""

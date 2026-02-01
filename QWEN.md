@@ -73,6 +73,7 @@ websocket-sse-server/
 ### 消息处理
 - SSE 消息通过 HTTP API 接收
 - 消息根据用户 ID 路由到对应的 WebSocket 连接
+- 支持公共账号功能，用户可通过 @mention 向公共账号发送消息
 - 支持批量消息处理
 - 错误处理和日志记录
 
@@ -126,6 +127,37 @@ python -m pytest tests/integration/
 2. **弃用警告修复**：更新了 Pydantic API 使用，将 `.dict()` 替换为 `.model_dump()`，更新了配置类定义
 3. **集成测试**：添加了全面的 WebSocket-SSE 集成测试，确保端到端功能正常
 4. **错误处理**：改进了异常处理逻辑，避免了潜在的死锁情况
+5. **公共账号功能**：增加了对公共账号的支持，允许用户通过 @mention 语法向公共账号（如CI机器人、邮件机器人等）发送消息
+
+## 公共账号功能
+
+系统支持公共账号（如CI机器人、邮件机器人等），用户可以通过 @mention 语法向这些公共账号发送消息。
+
+### 实现细节
+- 在 `src/websocket_sse_server/config/public_accounts.py` 中定义公共账号配置
+- 在 `SSEHandler.process_sse_message` 方法中添加消息内容解析逻辑
+- 使用正则表达式检测消息中的 @mention 模式
+- 将匹配到的公共账号消息路由到对应的WebSocket连接
+- 保留原始发送者信息，使公共账号知道消息来源
+
+### 默认公共账号
+- `ci_bot`
+- `email_bot`
+- `notification_bot`
+- `system_bot`
+
+### 环境配置
+通过 `PUBLIC_ACCOUNTS` 环境变量可以添加自定义公共账号：
+```
+PUBLIC_ACCOUNTS=custom_bot1,custom_bot2,another_bot
+```
+
+### 使用示例
+用户可以在消息中使用 @mention 语法：
+```
+"Please run tests on my branch @ci_bot"
+```
+这将把消息路由到 `ci_bot` 的WebSocket连接，同时保留原始发送者信息。
 
 ## 生产部署考虑
 
