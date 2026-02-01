@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import time
 import uuid
 from typing import Dict, Optional, Tuple
 from pydantic import ValidationError
@@ -13,6 +14,10 @@ from ..config import is_public_account, get_public_accounts
 from ..utils.logger import contextual_logger
 
 
+# Default TTL for correlation entries (in seconds)
+CORRELATION_TTL_SECONDS = 300  # 5 minutes
+
+
 class SSEHandler:
     """Handles SSE messages and routes them to WebSocket connections."""
 
@@ -20,8 +25,56 @@ class SSEHandler:
         self.connection_manager = connection_manager
         # Store queues for request-response flows (by correlation_id)
         self.request_response_queues: Dict[str, asyncio.Queue] = {}
-        # Track message correlation IDs
-        self.correlation_map: Dict[str, str] = {}
+        # Track message correlation IDs with timestamps for TTL-based cleanup
+        # Format: {correlation_id: (user_id, timestamp)}
+        self.correlation_map: Dict[str, Tuple[str, float]] = {}
+        # Lock for correlation_map operations
+        self._correlation_lock = asyncio.Lock()
+
+    async def _cleanup_expired_correlations(self) -> int:
+        """Remove expired correlation entries based on TTL.
+        
+        Returns:
+            Number of entries cleaned up.
+        """
+        current_time = time.time()
+        expired_keys = []
+        
+        async with self._correlation_lock:
+            for correlation_id, (user_id, timestamp) in self.correlation_map.items():
+                if current_time - timestamp > CORRELATION_TTL_SECONDS:
+                    expired_keys.append(correlation_id)
+            
+            for key in expired_keys:
+                del self.correlation_map[key]
+        
+        if expired_keys:
+            contextual_logger.debug(f"Cleaned up {len(expired_keys)} expired correlation entries")
+        
+        return len(expired_keys)
+
+    async def _store_correlation(self, correlation_id: str, user_id: str) -> None:
+        """Store a correlation entry with timestamp for TTL tracking."""
+        async with self._correlation_lock:
+            self.correlation_map[correlation_id] = (user_id, time.time())
+        
+        # Periodically cleanup expired entries (every 100 new entries)
+        if len(self.correlation_map) % 100 == 0:
+            await self._cleanup_expired_correlations()
+
+    async def _remove_correlation(self, correlation_id: str) -> None:
+        """Remove a correlation entry after it's been used."""
+        async with self._correlation_lock:
+            if correlation_id in self.correlation_map:
+                del self.correlation_map[correlation_id]
+                contextual_logger.debug("Removed correlation entry", correlation_id=correlation_id)
+
+    def _get_correlation_user(self, correlation_id: str) -> Optional[str]:
+        """Get user_id from correlation map (synchronous, for quick lookups)."""
+        entry = self.correlation_map.get(correlation_id)
+        if entry:
+            return entry[0]  # Return user_id
+        return None
 
     async def register_request_response(self, correlation_id: str) -> asyncio.Queue:
         """Register a request-response flow and return a queue for the response."""
@@ -88,8 +141,8 @@ class SSEHandler:
                 correlation_id = str(uuid.uuid4())
                 message.data['correlation_id'] = correlation_id
 
-            # Store correlation for tracking responses
-            self.correlation_map[correlation_id] = target_user_id
+            # Store correlation for tracking responses (with TTL)
+            await self._store_correlation(correlation_id, target_user_id)
 
             # Log the message routing
             contextual_logger.info("Processing SSE message",
@@ -176,22 +229,60 @@ class SSEHandler:
         return original_user_id, original_sender_info
 
     async def process_batch_sse_messages(self, raw_messages: list) -> list:
-        """Process multiple SSE messages."""
-        results = []
-        for idx, raw_message in enumerate(raw_messages):
-            success = await self.process_sse_message(raw_message)
-            result_entry = {
-                "index": idx,
-                "user_id": raw_message.get("user_id"),
-                "success": success
-            }
-            results.append(result_entry)
+        """Process multiple SSE messages concurrently for better performance."""
+        if not raw_messages:
+            return []
 
-            contextual_logger.debug("Processed batch message",
-                                   index=idx,
-                                   user_id=raw_message.get("user_id"),
-                                   success=success)
-        return results
+        # Create tasks for concurrent processing
+        async def process_with_index(idx: int, raw_message: dict) -> dict:
+            """Process a single message and return result with index."""
+            try:
+                success = await self.process_sse_message(raw_message)
+                return {
+                    "index": idx,
+                    "user_id": raw_message.get("user_id"),
+                    "success": success
+                }
+            except Exception as e:
+                contextual_logger.error(f"Error processing batch message at index {idx}: {e}",
+                                       index=idx, error=str(e))
+                return {
+                    "index": idx,
+                    "user_id": raw_message.get("user_id"),
+                    "success": False,
+                    "error": str(e)
+                }
+
+        # Execute all message processing concurrently
+        tasks = [
+            process_with_index(idx, raw_message)
+            for idx, raw_message in enumerate(raw_messages)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Handle any unexpected exceptions from gather
+        processed_results = []
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                contextual_logger.error(f"Unexpected error in batch processing at index {idx}: {result}",
+                                       index=idx, error=str(result))
+                processed_results.append({
+                    "index": idx,
+                    "user_id": raw_messages[idx].get("user_id") if idx < len(raw_messages) else None,
+                    "success": False,
+                    "error": str(result)
+                })
+            else:
+                processed_results.append(result)
+
+        # Sort by index to maintain order
+        processed_results.sort(key=lambda x: x["index"])
+
+        contextual_logger.info(f"Batch processing completed: {len(processed_results)} messages",
+                              total=len(processed_results),
+                              successful=sum(1 for r in processed_results if r.get("success")))
+
+        return processed_results
 
     async def forward_websocket_response_to_sse(self, user_id: str, response_data: dict) -> bool:
         """Forward a WebSocket response back to the SSE client."""
