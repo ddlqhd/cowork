@@ -1,7 +1,6 @@
 """Configuration management using Pydantic settings."""
 
-from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
@@ -29,7 +28,7 @@ class Settings(BaseSettings):
     # Security
     cors_origins: str = "*"
 
-    model_config = ConfigDict(
+    model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8"
     )
